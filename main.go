@@ -13,6 +13,8 @@ import(
 	"html"
 	"net/http"
 	"encoding/xml"
+	"strconv"
+	"strings"
 )
 
 
@@ -63,12 +65,14 @@ func main(){
 	theCommands.register("login", handlerLogin)
 	theCommands.register("register", handlerRegister)
 	theCommands.register("reset",handlerResetUsers)
-	theCommands.register("users",middlewareLoggedIn(handlerUsers))
-	theCommands.register("agg",agg)
+	theCommands.register("users",middlewareLoggedIn(handlerUsers))	
 	theCommands.register("addfeed",middlewareLoggedIn(addFeed))
 	theCommands.register("feeds",handlerFeeds)
+	theCommands.register("agg",agg)
 	theCommands.register("follow",middlewareLoggedIn(follow))
 	theCommands.register("following",middlewareLoggedIn(following))
+	theCommands.register("unfollow",middlewareLoggedIn(unfollow))
+	theCommands.register("browse",middlewareLoggedIn(handlerBrowse))
 	if len(os.Args) < 2{
 		os.Exit(1)
 	}
@@ -203,16 +207,31 @@ func fetchFeed(ctx context.Context, feedURL string)(*RSSFeed, error){
 	return &responseFeed, nil
 }
 
-func agg(_ *state, _ command)error{
-	context := context.Background()
-	URL := "https://www.wagslane.dev/index.xml"
-	response, err := fetchFeed(context,URL)
-
+func agg(s *state, cmd command)error{
+	timeBetweenRequests,err:= time.ParseDuration("100s")
 	if err != nil{
-		return err
-	}
-	fmt.Println(response)
 	return nil
+	}
+	if len(cmd.args) == 0 {
+	 timeBetweenRequests,err = time.ParseDuration("30s")
+		if err != nil{
+		return err
+		}
+	}else{
+	timeBetweenRequests,err = time.ParseDuration(cmd.args[0])
+	if err != nil{
+	return err
+	}
+	}
+	fmt.Println(timeBetweenRequests)
+	ticker := time.NewTicker(timeBetweenRequests)
+	for ; ; <-ticker.C {
+		err := scrapeFeeds(s,cmd)
+		if err != nil{
+		fmt.Println(err)
+		}
+	}
+	
 }
 	
 func addFeed(s *state, cmd command, user database.User)error{
@@ -337,4 +356,117 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User)e
 	return nil
 	}
 	
+}
+
+
+func unfollow(s *state, cmd command, user database.User)error{
+
+	newParams := database.DeleteFeedFollowByUserAndUrlParams{
+		Name: user.Name,
+		Url: cmd.args[0],
+
+	}
+
+	err := s.db.DeleteFeedFollowByUserAndUrl(context.Background(),newParams)
+	if err != nil{
+	return err
+	}
+	return nil
+}
+
+func scrapeFeeds(s *state, cmd command)error{	
+	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil{
+	return err
+	}
+	MarkFeedParams := database.MarkFeedFetchedParams{
+		LastFetchedAt: getCurrentTimeAsNullTime(), 
+		ID: nextFeed.ID,
+	}
+	err = s.db.MarkFeedFetched(context.Background(),MarkFeedParams)
+	if err != nil{
+	return err
+	}
+	feedResponse, err := fetchFeed(context.Background(), nextFeed.Url)
+	if err != nil {
+	return err
+	}
+	
+	for _, item := range feedResponse.Channel.Item{	
+		publicationTime,err := time.Parse(time.RFC1123, item.PubDate)
+		if err != nil{
+		return err
+		}
+		postParams := database.CreatePostParams{
+			ID: uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Title: getNullString(item.Title),
+			Url: item.Link,
+			Description: getNullString(item.Description),
+			PublishedAt: sql.NullTime{
+					Time: publicationTime, 
+					Valid: true,
+			},
+			FeedID:uuid.NullUUID{ 
+				UUID: nextFeed.ID,
+				Valid: true,
+			},
+		}
+		
+		_ ,err = s.db.CreatePost(context.Background(),postParams)	
+		if err != nil{
+			if strings.Contains(err.Error(),"duplicate key value violates unique constraint"){
+			fmt.Println("Beep Boop DuplicateErrorFound")
+			continue	
+			}
+		return err
+		}
+		
+	}
+
+	return nil
+}
+
+func getNullString(inputString string) sql.NullString{
+	return sql.NullString{
+	String: inputString,
+	Valid: true,
+	}
+}
+
+func getCurrentTimeAsNullTime() sql.NullTime{
+	return sql.NullTime{
+		Time: time.Now(),
+		Valid: true,
+	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User)error{
+	limitInt := 2
+	if len(cmd.args) > 0{
+		i,err := strconv.Atoi(cmd.args[0]) 
+		if err != nil{
+		return err
+		}
+		limitInt = i
+	}
+	NewGetPostParams := database.GetPostsForUserParams{
+			UserID: uuid.NullUUID{
+				UUID:user.ID,
+				Valid: true,
+		},
+			Limit: int32(limitInt),
+
+	}
+
+	browseResponse,err := s.db.GetPostsForUser(context.Background(),NewGetPostParams)
+	if err != nil{
+	return err
+	}
+	for _,item := range browseResponse{
+		fmt.Println(item)
+	}
+	return nil
+
 }

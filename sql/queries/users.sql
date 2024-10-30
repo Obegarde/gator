@@ -71,5 +71,55 @@ INNER JOIN feeds ON feed_follows.feed_id = feeds.id
 INNER JOIN users ON feed_follows.user_id = users.id
 WHERE	users.name = $1;
 
+-- name: DeleteFeedFollowByUserAndUrl :exec
+DELETE FROM feed_follows
+WHERE user_id IN (
+	SELECT id
+	FROM users
+	WHERE users.name = $1
+)
+AND feed_id IN (
+	SELECT id 
+	FROM feeds
+	WHERE url = $2
+);
+
+-- name: MarkFeedFetched :exec
+UPDATE feeds
+SET last_fetched_at = $1,
+	updated_at = $1
+WHERE feeds.id = $2;
+
+-- name: GetNextFeedToFetch :one
+SELECT *
+FROM feeds
+ORDER BY last_fetched_at ASC NULLS FIRST
+LIMIT 1;
+
+-- name: CreatePost :one
+INSERT INTO posts (id, created_at, updated_at,title,url,description,published_at,feed_id)
+VALUES (
+	$1,
+	$2,
+	$3,
+	$4,
+	$5,
+	$6,
+	$7,
+	$8
+	)
+RETURNING *;
+
+
+-- name: GetPostsForUser :many
+SELECT * 
+FROM posts
+WHERE feed_id IN(
+SELECT feed_id
+FROM feed_follows
+WHERE user_id = $1
+)
+ORDER BY published_at DESC
+LIMIT $2;
 
 
