@@ -67,6 +67,8 @@ func main(){
 	theCommands.register("agg",agg)
 	theCommands.register("addfeed",addFeed)
 	theCommands.register("feeds",handlerFeeds)
+	theCommands.register("follow",follow)
+	theCommands.register("following",following)
 	if len(os.Args) < 2{
 		os.Exit(1)
 	}
@@ -242,7 +244,27 @@ func addFeed(s *state, cmd command)error{
 	if err != nil{
 		return fmt.Errorf("addfeed Error: %w", err)
 	}
-	fmt.Println(newlyCreatedFeed)
+		
+	newFeedFollowParams := database.CreateFeedFollowParams{
+		ID: uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID: uuid.NullUUID{
+			UUID: currentUser.ID,
+			Valid: true,},
+		FeedID: uuid.NullUUID{
+			UUID: newlyCreatedFeed.ID,
+			Valid: true,},
+	}
+
+	_,err = s.db.CreateFeedFollow(context.Background(),newFeedFollowParams)
+	if err != nil{
+		return err
+	}
+		
+	if err != nil{
+	return fmt.Errorf("addFeed Follow error: %w\n", err)
+	}
 	return nil
 }
 	
@@ -264,6 +286,50 @@ func handlerFeeds(s *state, _ command) error{
 		fmt.Printf("Created: %v\n",feed.CreatedAt)
 		fmt.Printf("Last Edited: %v\n", feed.UpdatedAt)
 				
+	}
+	return nil
+}
+
+func follow(s *state, cmd command)error{
+	currentUserData,err := s.db.GetUser(context.Background(),s.config.CurrentUserName)	
+	if err != nil{
+	return err
+	}
+	feedToFollow, err := s.db.GetFeedByURL(context.Background(),cmd.args[0])
+	if err != nil {
+	return err
+	}
+
+	newFeedFollowParams := database.CreateFeedFollowParams{
+		ID: uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID: uuid.NullUUID{
+			UUID: currentUserData.ID,
+			Valid: true,},
+		FeedID: uuid.NullUUID{
+			UUID: feedToFollow.ID,
+			Valid: true,},
+	}
+
+	feedFollowRow,err := s.db.CreateFeedFollow(context.Background(),newFeedFollowParams)
+	if err != nil{
+		return err
+	}
+
+	fmt.Printf("User: %v\n",feedFollowRow[0].UserName)
+	fmt.Printf("Feed: %v\n",feedFollowRow[0].FeedName)
+	return nil
+	
+}
+
+func following(s *state, _ command)error{
+	followingData, err := s.db.GetFeedFollowsForUser(context.Background(),s.config.CurrentUserName)
+	if err != nil{
+	return err
+	}
+	for _, row := range followingData{
+	 fmt.Println(row.FeedName)
 	}
 	return nil
 }
