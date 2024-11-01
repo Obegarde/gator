@@ -14,10 +14,17 @@ Step 1. create a config file in your home directory called .gatorconfig.json
 
 replace example_username and example_password
 
-Step 2. Install gator.
+step 2
+Create a database called gator
+
+psql
+CREATE DATABASE gator;
+
+
+Step 3. Install gator.
 go install gator
 
-Step 3.
+Step 4.
 
 run
 gator migrate up

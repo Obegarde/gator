@@ -96,7 +96,7 @@ func main(){
 
 }
 func migrate(s *state, cmd command)error{		
-	migrationDir := "/sql/schema/" 
+	migrationDir := "./sql/schema" 
 	switch cmd.args[0]{
 	case "up":
 		err := goose.Up(s.rawDB,migrationDir)
