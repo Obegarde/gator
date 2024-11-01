@@ -36,6 +36,7 @@ CREATE TABLE posts(
 	description TEXT,
 	published_at TIMESTAMP,
 	feed_id UUID,
+	entry_number SERIAL,
 	FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 );
 

@@ -147,7 +147,7 @@ VALUES (
 	$7,
 	$8
 	)
-RETURNING id, created_at, updated_at, title, url, description, published_at, feed_id
+RETURNING id, created_at, updated_at, title, url, description, published_at, feed_id, entry_number
 `
 
 type CreatePostParams struct {
@@ -182,6 +182,7 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 		&i.Description,
 		&i.PublishedAt,
 		&i.FeedID,
+		&i.EntryNumber,
 	)
 	return i, err
 }
@@ -372,13 +373,11 @@ func (q *Queries) GetNextFeedToFetch(ctx context.Context) (Feed, error) {
 }
 
 const getPostsForUser = `-- name: GetPostsForUser :many
-SELECT id, created_at, updated_at, title, url, description, published_at, feed_id 
+SELECT posts.id, posts.created_at, posts.updated_at, posts.title, posts.url, posts.description, posts.published_at, posts.feed_id, posts.entry_number, feeds.name AS feed_name
 FROM posts
-WHERE feed_id IN(
-SELECT feed_id
-FROM feed_follows
-WHERE user_id = $1
-)
+JOIN feeds ON posts.feed_id = feeds.id
+JOIN feed_follows ON feed_follows.feed_id = feeds.id
+WHERE feed_follows.user_id = $1
 ORDER BY published_at DESC
 LIMIT $2
 `
@@ -388,15 +387,28 @@ type GetPostsForUserParams struct {
 	Limit  int32
 }
 
-func (q *Queries) GetPostsForUser(ctx context.Context, arg GetPostsForUserParams) ([]Post, error) {
+type GetPostsForUserRow struct {
+	ID          uuid.UUID
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Title       sql.NullString
+	Url         string
+	Description sql.NullString
+	PublishedAt sql.NullTime
+	FeedID      uuid.NullUUID
+	EntryNumber sql.NullInt32
+	FeedName    string
+}
+
+func (q *Queries) GetPostsForUser(ctx context.Context, arg GetPostsForUserParams) ([]GetPostsForUserRow, error) {
 	rows, err := q.db.QueryContext(ctx, getPostsForUser, arg.UserID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Post
+	var items []GetPostsForUserRow
 	for rows.Next() {
-		var i Post
+		var i GetPostsForUserRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.CreatedAt,
@@ -406,6 +418,8 @@ func (q *Queries) GetPostsForUser(ctx context.Context, arg GetPostsForUserParams
 			&i.Description,
 			&i.PublishedAt,
 			&i.FeedID,
+			&i.EntryNumber,
+			&i.FeedName,
 		); err != nil {
 			return nil, err
 		}
@@ -418,6 +432,19 @@ func (q *Queries) GetPostsForUser(ctx context.Context, arg GetPostsForUserParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const getUrlByEntryNumber = `-- name: GetUrlByEntryNumber :one
+SELECT url
+FROM posts
+WHERE entry_number = $1
+`
+
+func (q *Queries) GetUrlByEntryNumber(ctx context.Context, entryNumber sql.NullInt32) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUrlByEntryNumber, entryNumber)
+	var url string
+	err := row.Scan(&url)
+	return url, err
 }
 
 const getUser = `-- name: GetUser :one

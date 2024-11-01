@@ -38,6 +38,7 @@ type Post struct {
 	Description sql.NullString
 	PublishedAt sql.NullTime
 	FeedID      uuid.NullUUID
+	EntryNumber sql.NullInt32
 }
 
 type User struct {

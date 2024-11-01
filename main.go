@@ -15,12 +15,16 @@ import(
 	"encoding/xml"
 	"strconv"
 	"strings"
+	"os/exec"
+	"runtime"	
+   	"github.com/pressly/goose/v3"
 )
 
 
 type state struct{
 	config *config.Config
 	db *database.Queries
+	rawDB *sql.DB
 }
 
 type command struct{
@@ -58,9 +62,10 @@ func main(){
 	if err != nil{
 		fmt.Printf("SqlError: %v\n", err)
 	}
+	theState.rawDB = db
 	defer db.Close()
 	dbQueries := database.New(db)
-	theState.db = dbQueries
+	theState.db = dbQueries	
 	theCommands := newCommands()
 	theCommands.register("login", handlerLogin)
 	theCommands.register("register", handlerRegister)
@@ -73,6 +78,9 @@ func main(){
 	theCommands.register("following",middlewareLoggedIn(following))
 	theCommands.register("unfollow",middlewareLoggedIn(unfollow))
 	theCommands.register("browse",middlewareLoggedIn(handlerBrowse))
+	theCommands.register("launch",middlewareLoggedIn(handlerLaunch))
+	theCommands.register("migrate",migrate)
+	theCommands.register("help",printHelp)
 	if len(os.Args) < 2{
 		os.Exit(1)
 	}
@@ -86,6 +94,46 @@ func main(){
 	os.Exit(1)
 	}
 
+}
+func migrate(s *state, cmd command)error{		
+	migrationDir := "/sql/schema/" 
+	switch cmd.args[0]{
+	case "up":
+		err := goose.Up(s.rawDB,migrationDir)
+		if err != nil{
+			return err
+		}
+	case "down":
+		err := goose.Down(s.rawDB,migrationDir)
+		if err != nil{
+			return err
+		}
+
+	default:
+	fmt.Println("Choose a database migration either up or down")
+	
+	}
+	return nil
+}
+
+func printHelp(_ *state, _ command)error{
+	fmt.Println("Gator - RSS Feed Reader")
+	fmt.Println("Commands:")
+	fmt.Println("	login <username>		-logs you into the given user")
+	fmt.Println("	register <username>		-registers you with the given username")
+	fmt.Println("	agg [timeBetweenChecks]		-starts the aggregator witht he given time between checks")
+	fmt.Println("	addfeed <FeedName> <FeedUrl>	-adds the feed at the url under your given name")
+	fmt.Println("	browse [Amount]			-lists the posts(default 2)")
+	fmt.Println("	launch <EntryNumber>		-opens the post in your default browser")
+	fmt.Println("	reset				-reset registered users")
+	fmt.Println("	feeds				-shows all feeds")
+	fmt.Println("	follow <Url> 			-make this user follow the feed")
+	fmt.Println("	following			-shows all feeds this user follows")
+	fmt.Println("	unfollow <Url>			-unfollow a feed")
+	fmt.Println("	users				-shows all users")
+	fmt.Println("	migrate <up|down> 		-migrates the database up or down")
+	fmt.Println("	help				-shows the commands")
+	return nil
 }
 func handlerResetUsers(s *state, _ command) error{
 	fmt.Println("Attempting to reset users")
@@ -111,7 +159,7 @@ func handlerRegister(s *state, cmd command) error{
 	newUser,err := s.db.CreateUser(newUserContext, *newUserParams)
 	if err != nil{
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505"{
-			return fmt.Errorf("user already exists")	
+			return fmt.Errorf("username: %v already exists", newUserParams.Name)	
 		}
 	return err
 	}
@@ -119,7 +167,7 @@ func handlerRegister(s *state, cmd command) error{
 	if err != nil{
 	return err
 	}
-	fmt.Printf("User successfully registered\nUserData: %v\n",newUser)
+	fmt.Printf("%v successfully registered\n",newUser.Name)
 	return nil
 }
 
@@ -373,8 +421,36 @@ func unfollow(s *state, cmd command, user database.User)error{
 	}
 	return nil
 }
+func getSqlNullTimeFromString(timestamp string)(sql.NullTime,error){
+	timeFormats := []string{	
+	 "Mon, 2 Jan 2006 15:04:05 GMT",
+	"Mon, 02 Jan 2006 15:04:05 GMT",
+	 "Mon, 2 Jan 2006 15:04:05 +0000",
+	"Mon, 02 Jan 2008 15:04:05 +0000",}
 
-func scrapeFeeds(s *state, cmd command)error{	
+var parsedTime time.Time
+var err error
+
+
+for _, format := range timeFormats{
+	parsedTime, err = time.Parse(format, timestamp)
+	if err == nil {
+	break
+	}
+}
+if err != nil{
+	return sql.NullTime{},err
+}
+	return sql.NullTime{
+		Time:parsedTime,
+		Valid:true,
+	},nil
+
+}
+
+
+
+func scrapeFeeds(s *state, _ command)error{	
 	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
 	if err != nil{
 	return err
@@ -393,7 +469,7 @@ func scrapeFeeds(s *state, cmd command)error{
 	}
 	
 	for _, item := range feedResponse.Channel.Item{	
-		publicationTime,err := time.Parse(time.RFC1123, item.PubDate)
+		publicationTime,err := getSqlNullTimeFromString(item.PubDate)
 		if err != nil{
 		return err
 		}
@@ -404,10 +480,7 @@ func scrapeFeeds(s *state, cmd command)error{
 			Title: getNullString(item.Title),
 			Url: item.Link,
 			Description: getNullString(item.Description),
-			PublishedAt: sql.NullTime{
-					Time: publicationTime, 
-					Valid: true,
-			},
+			PublishedAt: publicationTime,
 			FeedID:uuid.NullUUID{ 
 				UUID: nextFeed.ID,
 				Valid: true,
@@ -416,8 +489,7 @@ func scrapeFeeds(s *state, cmd command)error{
 		
 		_ ,err = s.db.CreatePost(context.Background(),postParams)	
 		if err != nil{
-			if strings.Contains(err.Error(),"duplicate key value violates unique constraint"){
-			fmt.Println("Beep Boop DuplicateErrorFound")
+			if strings.Contains(err.Error(),"duplicate key value violates unique constraint"){	
 			continue	
 			}
 		return err
@@ -465,8 +537,50 @@ func handlerBrowse(s *state, cmd command, user database.User)error{
 	return err
 	}
 	for _,item := range browseResponse{
-		fmt.Println(item)
+		fmt.Printf("Feed: %v\n",item.FeedName)
+		fmt.Printf("Title: %v\n",item.Title.String)
+		fmt.Printf("URL: %v\n",item.Url)
+		if !strings.Contains(item.Description.String, item.Url){
+			fmt.Printf("Description: %.100v\n",item.Description.String)
+		}
+		fmt.Printf("Published: %v\n", item.PublishedAt.Time)
+		fmt.Printf("Post Number: %v\n", item.EntryNumber.Int32)
+		fmt.Println("")
 	}
 	return nil
 
+}
+
+func handlerLaunch(s *state, cmd command, user database.User)error{
+	if len(cmd.args) < 1{
+	return fmt.Errorf("To load a post you need to enter the Post Number along with the launch command")
+	}
+	argConvertedFromString,err := strconv.Atoi(cmd.args[0])
+	if err != nil{
+	return err
+	}
+	convertedEntryNumber := sql.NullInt32{
+			Int32: int32(argConvertedFromString),
+			Valid: true,
+	}
+	postUrl, err := s.db.GetUrlByEntryNumber(context.Background(),convertedEntryNumber)
+	err = openBrowser(postUrl)
+	if err != nil{
+		return err
+	}
+	return nil
+}
+
+func openBrowser(url string)error{
+	var cmd string
+	switch runtime.GOOS{
+	case"darwin":
+		cmd = "open"
+	
+	case "windows":
+		cmd = "cmd"
+	default:
+		cmd = "xdg-open"
+	}
+	return exec.Command(cmd, url).Start()
 }

@@ -112,14 +112,24 @@ RETURNING *;
 
 
 -- name: GetPostsForUser :many
-SELECT * 
+SELECT posts.*, feeds.name AS feed_name
 FROM posts
-WHERE feed_id IN(
-SELECT feed_id
-FROM feed_follows
-WHERE user_id = $1
-)
+JOIN feeds ON posts.feed_id = feeds.id
+JOIN feed_follows ON feed_follows.feed_id = feeds.id
+WHERE feed_follows.user_id = $1
 ORDER BY published_at DESC
 LIMIT $2;
+
+-- name: GetUrlByEntryNumber :one
+SELECT url
+FROM posts
+WHERE entry_number = $1;
+
+
+
+
+
+
+
 
 
