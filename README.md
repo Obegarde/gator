@@ -14,8 +14,8 @@ Step 1. create a config file in your home directory called .gatorconfig.json
 
 replace example_username and example_password
 
-Step 2. build the gator binary in the main folder.
-go build
+Step 2. Install gator.
+go install gator
 
 Step 3.
 
